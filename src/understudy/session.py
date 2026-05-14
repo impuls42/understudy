@@ -104,7 +104,7 @@ class GameSession:
         self.unit_name = unit_name or _UNIT_TEMPLATE.format(appid)
         self.width = width
         self.height = height
-        self.extra_gamescope_args = extra_gamescope_args or ["-e", "-f"]
+        self.extra_gamescope_args = extra_gamescope_args if extra_gamescope_args is not None else ["-f"]
         self._unit: Unit | None = None
 
     # --- context manager ---
@@ -142,6 +142,9 @@ class GameSession:
             "WAYLAND_DISPLAY": display,
             "SDL_VIDEODRIVER": "wayland",
             "XDG_RUNTIME_DIR": str(xdg_runtime_dir()),
+            # Prevent gamescope from using the login session's X display.
+            # Gamescope spawns its own Xwayland and sets DISPLAY for children.
+            "DISPLAY": "",
         }
 
         self._unit = pystemd_run(
