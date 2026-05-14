@@ -1,0 +1,20 @@
+[Unit]
+Description=Sway compositor – headless backend for understudy
+Documentation=https://github.com/swaywm/sway
+# Slot into the user graphical session without requiring one to exist.
+After=dbus.service
+
+[Service]
+Type=simple
+# Use our fixed display name so every component finds the same socket.
+Environment=WAYLAND_DISPLAY=wayland-headless
+Environment=WLR_BACKENDS=headless
+Environment=XDG_SESSION_TYPE=wayland
+ExecStart=/usr/bin/sway -c %h/.config/sway/headless.conf
+# If sway crashes, let it come back; a systemd restart keeps downstream
+# services from seeing a permanent failure.
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

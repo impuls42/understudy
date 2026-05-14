@@ -1,0 +1,18 @@
+[Unit]
+Description=wayvnc – VNC access to the understudy headless sway session
+Documentation=https://github.com/any1/wayvnc
+After=understudy-sway.service
+BindsTo=understudy-sway.service
+
+[Service]
+Type=simple
+# WAYLAND_DISPLAY is populated at runtime by Stack.up() writing to this file.
+# The file is created only after the actual sway socket is discovered, so
+# wayvnc always connects to the correct display regardless of sway's auto-numbering.
+EnvironmentFile=/run/user/%U/understudy.env
+ExecStart=/usr/bin/wayvnc 0.0.0.0 5900
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

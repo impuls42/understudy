@@ -1,0 +1,21 @@
+"""{{display_name}} game profile for understudy."""
+from understudy.profile import GameProfile, Coords
+
+PROFILE = GameProfile(
+    slug="{{slug}}",
+    appid={{appid}},
+    display_name="{{display_name}}",
+    resolution=(1920, 1080),
+    launch_timeout_s=90.0,
+    ready_ref="main_menu",   # record this ref then run `us run games/{{slug}}/tests/`
+    extra_gamescope_args=["-e", "-f"],
+    coords=Coords(
+        # Fill these in after recording refs:
+        #   1. `us game launch {{slug}}`
+        #   2. Connect TigerVNC to :5900 and navigate to the target UI
+        #   3. `us ref record <name> --refs-dir games/{{slug}}/refs`
+        #   4. Note x,y from VNC cursor and add them here
+        # Example:
+        # new_game_button=(960, 540),
+    ),
+)
