@@ -28,6 +28,7 @@ from .session import GameSession
 from .input import Compositor
 from .capture import Screen
 from .refs import RefStore
+from .profile import GameProfile, Coords, load_profile
 from . import compare, waits
 
 __all__ = [
@@ -43,6 +44,9 @@ __all__ = [
     "Compositor",
     "Screen",
     "RefStore",
+    "GameProfile",
+    "Coords",
+    "load_profile",
     # Module namespaces
     "compare",
     "waits",

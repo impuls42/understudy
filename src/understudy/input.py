@@ -202,10 +202,22 @@ class Compositor:
 
     def scroll(self, dx: float = 0.0, dy: float = 0.0) -> None:
         """Scroll horizontally by *dx* and vertically by *dy* (positive = down/right)."""
-        if dy:
-            _wlrctl("pointer", "scroll", "vertical", str(dy))
-        if dx:
-            _wlrctl("pointer", "scroll", "horizontal", str(dx))
+        if self._use_xdotool():
+            display = _gamescope_xdisplay()
+            env = {**os.environ, "DISPLAY": display}
+            if dy:
+                btn = "5" if dy > 0 else "4"
+                for _ in range(max(1, abs(int(dy)))):
+                    subprocess.run(["xdotool", "click", btn], env=env, capture_output=True)
+            if dx:
+                btn = "7" if dx > 0 else "6"
+                for _ in range(max(1, abs(int(dx)))):
+                    subprocess.run(["xdotool", "click", btn], env=env, capture_output=True)
+        else:
+            if dy:
+                _wlrctl("pointer", "scroll", "vertical", str(dy))
+            if dx:
+                _wlrctl("pointer", "scroll", "horizontal", str(dx))
 
     def type(self, text: str) -> None:
         """Type a string of characters."""
@@ -219,4 +231,4 @@ class Compositor:
         if self._use_xdotool():
             _xdotool_key(keysym)
         else:
-            _wlrctl("keyboard", "type", keysym)
+            _wlrctl("keyboard", "press", keysym)

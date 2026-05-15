@@ -10,7 +10,10 @@ PROFILE = GameProfile(
     ready_ref="main_menu",   # GameSession waits for this ref before handing control
     extra_gamescope_args=["-f"],
     coords=Coords(
-        # Filled in after recording refs from a live session.
-        # Use `us scene capture` + VNC to find the correct coordinates.
+        # Main menu buttons — all centered at x=960 (1920×1080 layout)
+        mods_dialog_ok=(960, 826),      # "OK" on mod load-order dialog at startup
+        settings_button=(960, 617),     # opens Settings panel from main menu
+        settings_close=(1275, 252),     # X button to close Settings panel
+        skip_intro_checkbox=(760, 406), # "Пропустити вступ" checkbox in Settings
     ),
 )
