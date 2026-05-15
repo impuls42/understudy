@@ -31,7 +31,7 @@ at predictable paths an agent can `Read` directly.
 ## One-time install
 
 ```bash
-git clone <this-repo> ~/Documents/understudy
+git clone https://github.com/impuls42/understudy.git ~/Documents/understudy
 cd ~/Documents/understudy
 
 # Install Python dependencies (creates .venv/)
@@ -44,6 +44,21 @@ cp sway/headless.conf ~/.config/sway/headless.conf
 # Register and start the systemd user units (done automatically by stack up too)
 us stack install
 ```
+
+---
+
+## Claude Code skill
+
+The `us` tool ships a Claude Code skill that lets any agent drive game sessions
+without reading the source code. After cloning, symlink it into the global
+skills directory:
+
+```bash
+ln -sf ~/Documents/understudy/.claude/skills/understudy ~/.claude/skills/understudy
+```
+
+Restart Claude Code. The `understudy` skill will appear in the available-skills
+list whenever you open a project.
 
 ---
 

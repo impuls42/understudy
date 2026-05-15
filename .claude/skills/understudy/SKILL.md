@@ -8,7 +8,15 @@ description: >
   pytest. Activate for any prompt that involves: "start the game", "take a
   screenshot", "click <button>", "wait for the main menu", "record a ref",
   "run smoke tests", or anything that requires driving game UI programmatically.
-allowed-tools: [Bash, Read, Glob, Grep]
+license: MIT
+compatibility: >
+  Linux only; requires systemd user session, sway ≥ 1.9, gamescope ≥ 3.16,
+  wayvnc, grim, wlrctl, Steam with the target game installed, Python ≥ 3.11,
+  and uv. Designed for Claude Code.
+metadata:
+  author: impuls42
+  version: "0.1"
+allowed-tools: Bash Read Glob Grep
 ---
 
 # understudy
