@@ -191,12 +191,15 @@ class Compositor:
         delay: float = 0.05,
     ) -> None:
         """Move to (x, y) then press and release *button*."""
-        if self._use_xdotool():
-            self.move(x, y)
+        display = _gamescope_xdisplay()
+        if display is not None:
+            # Discover display once; pass it through so _xdotool_click doesn't
+            # call ps again. Skip the separate self.move() — _xdotool_click
+            # already issues its own mousemove before the click.
             time.sleep(delay)
-            _xdotool_click(x, y, button)
+            _xdotool_click(x, y, button, xdisplay=display)
         else:
-            self.move(x, y)
+            _wlrctl("pointer", "move", str(x), str(y))
             time.sleep(delay)
             _wlrctl("pointer", "click", button)
 
@@ -232,3 +235,17 @@ class Compositor:
             _xdotool_key(keysym)
         else:
             _wlrctl("keyboard", "press", keysym)
+
+
+# ---------------------------------------------------------------------------
+# Public helpers (thin wrappers around private discovery functions)
+# ---------------------------------------------------------------------------
+
+def gamescope_x_display() -> str | None:
+    """Return the X display string for the active gamescope Xwayland (e.g. ':3'), or None."""
+    return _gamescope_xdisplay()
+
+
+def game_window_id(xdisplay: str) -> str | None:
+    """Return the hex window ID of the main game window on *xdisplay*, or None."""
+    return _game_window_id(xdisplay)

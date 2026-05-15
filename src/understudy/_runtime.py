@@ -6,8 +6,9 @@ other env values that must be consistent across every component.
 Socket-name note: sway 1.9 uses wl_display_add_socket_auto(), which generates
 sequential names (wayland-0, wayland-1, …) regardless of the WAYLAND_DISPLAY
 env var. So we auto-discover the socket sway actually created by correlating
-it with the sway IPC socket mtime. The GDM session always holds wayland-0,
-our headless sway takes the next free slot.
+it with the sway IPC socket mtime. On a desktop with GDM, wayland-0 belongs
+to the login session and our sway takes the next free slot. On a pure-headless
+CI machine with no GDM, sway takes wayland-0; we must not exclude it blindly.
 """
 
 from __future__ import annotations
@@ -58,15 +59,20 @@ def discover_wayland_display() -> str | None:
         if p.name.startswith("wayland-")
         and not p.name.endswith(".lock")
         and p.is_socket()
-        and p.name != "wayland-0"  # GDM session
     ]
     if not wayland_sockets:
         return None
 
-    # Prefer sockets created within 5 seconds of the IPC socket.
+    # Prefer sockets created within 5 seconds of the IPC socket (mtime
+    # correlation). On a desktop, GDM's wayland-0 was created at login time
+    # so its mtime diverges by minutes; on a pure-headless CI machine sway
+    # takes wayland-0 and its mtime matches. The mtime check handles both.
     close = [p for p in wayland_sockets if abs(p.stat().st_mtime - ipc_mtime) < 5.0]
     candidates = close if close else wayland_sockets
-    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    # Among equally-matched candidates, prefer non-zero sockets so that on a
+    # desktop we still pick wayland-1/2/… over GDM's wayland-0 when both
+    # happen to fall in the time window.
+    candidates.sort(key=lambda p: (p.name == "wayland-0", -p.stat().st_mtime))
     return candidates[0].name
 
 

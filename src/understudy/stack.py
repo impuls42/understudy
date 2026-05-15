@@ -146,6 +146,9 @@ class Stack:
         # Must happen AFTER the socket is discovered (i.e. after sway is up).
         _write_env_file()
 
+        # NOTE: if wayvnc is already active but was started against a stale
+        # WAYLAND_DISPLAY, StartUnit is a no-op and wayvnc listens on the wrong
+        # display. The safe recovery is `us stack down && us stack up`.
         if _active_state(WAYVNC_UNIT, bus) != "active":
             m.Manager.StartUnit(WAYVNC_UNIT.encode(), b"replace")
 

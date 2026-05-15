@@ -24,16 +24,16 @@ def _dismiss_mods_dialog(duration: float = 70.0, interval: float = 5.0) -> None:
     after the dialog are harmless.
     """
     import os
-    from understudy.input import _gamescope_xdisplay, _game_window_id
+    from understudy.input import gamescope_x_display, game_window_id
 
     deadline = time.monotonic() + duration
     xd = win = None
 
     while time.monotonic() < deadline:
         if xd is None:
-            xd = _gamescope_xdisplay()
+            xd = gamescope_x_display()
         if xd and win is None:
-            win = _game_window_id(xd)
+            win = game_window_id(xd)
 
         if xd and win:
             env = {**os.environ, "DISPLAY": xd}

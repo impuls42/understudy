@@ -65,12 +65,11 @@ def _check_no_stray_steam() -> None:
     uid = psutil.Process().uids().real
     for proc in psutil.process_iter(["name", "uids"]):
         try:
-            if (
-                "steam" in proc.info["name"].lower()
-                and proc.info["uids"].real == uid
-            ):
+            name = proc.info.get("name")
+            uids = proc.info.get("uids")
+            if name and "steam" in name.lower() and uids and uids.real == uid:
                 raise PreconditionError(
-                    f"Steam process already running (PID {proc.pid}: {proc.info['name']}).",
+                    f"Steam process already running (PID {proc.pid}: {name}).",
                     hint=(
                         "Kill it first: `pkill -u $USER steam` or `us game kill`."
                         " See design doc §3.6."
@@ -115,6 +114,17 @@ class GameSession:
         self.height = height
         self.extra_gamescope_args = extra_gamescope_args if extra_gamescope_args is not None else ["-f"]
         self._unit: Unit | None = None
+
+    @classmethod
+    def from_unit_name(cls, name: str) -> "GameSession":
+        """Reconstruct a teardown-only session from an existing unit name.
+
+        The returned object is only valid for calling stop(). appid and other
+        launch-time attributes are set to inert defaults.
+        """
+        obj = cls(appid=0)
+        obj.unit_name = name
+        return obj
 
     # --- context manager ---
 

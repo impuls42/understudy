@@ -441,10 +441,7 @@ def game_kill(
             typer.echo("No active game session found.")
         return
     try:
-        # Reconstruct session from unit name (unit name encodes appid)
-        session = GameSession.__new__(GameSession)
-        session.unit_name = name
-        session._unit = None
+        session = GameSession.from_unit_name(name)
         session.stop(grace=grace)
         if as_json:
             typer.echo(_json_mod.dumps({"ok": True, "killed": name}))
@@ -677,7 +674,8 @@ def _ref_record_interactive(store) -> None:  # store: RefStore
             typer.echo("Done.")
             return
 
-        tmp = Path(tempfile.mktemp(suffix=".png", prefix="us-ref-"))
+        with tempfile.NamedTemporaryFile(suffix=".png", prefix="us-ref-", delete=False) as _f:
+            tmp = Path(_f.name)
         try:
             Screen().save(path=tmp)
         except UnderstudyError as e:
@@ -756,11 +754,17 @@ def ref_record(
 @ref_app.command("list")
 def ref_list(
     refs_dir: str = typer.Option("", "--refs-dir"),
+    slug: str = typer.Option("", "--slug", "-s", help="Game profile slug — resolves refs-dir from the profile."),
     as_json: bool = typer.Option(False, "--json"),
 ) -> None:
     """List all reference images."""
     from .refs import RefStore
-    store = RefStore(refs_dir if refs_dir else _refs_dir())
+    try:
+        resolved_dir = _resolve_refs_dir(refs_dir, slug)
+    except FileNotFoundError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(2)
+    store = RefStore(resolved_dir)
     names = store.list()
     if as_json:
         typer.echo(_json_mod.dumps({"ok": True, "refs": names}))
@@ -773,11 +777,17 @@ def ref_list(
 def ref_show(
     name: str = typer.Argument(...),
     refs_dir: str = typer.Option("", "--refs-dir"),
+    slug: str = typer.Option("", "--slug", "-s", help="Game profile slug — resolves refs-dir from the profile."),
     as_json: bool = typer.Option(False, "--json"),
 ) -> None:
     """Print the path to a reference image (useful for agents to Read it)."""
     from .refs import RefStore
-    store = RefStore(refs_dir if refs_dir else _refs_dir())
+    try:
+        resolved_dir = _resolve_refs_dir(refs_dir, slug)
+    except FileNotFoundError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(2)
+    store = RefStore(resolved_dir)
     p = store.path(name)
     if as_json:
         typer.echo(_json_mod.dumps({"ok": p.exists(), "path": str(p), "exists": p.exists()}))
