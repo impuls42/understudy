@@ -37,7 +37,7 @@ Uses xdotool (X11 via gamescope Xwayland) when a game is running, wlrctl (Waylan
 | `us act click X Y` | x y | `--button left\|right\|middle` `--delay 0.05` | Move pointer then click |
 | `us act move X Y` | x y | | Move pointer without clicking |
 | `us act type TEXT` | text | | Type a string via virtual keyboard |
-| `us act key KEYSYM` | keysym | | Press and release one key (XKB names: `Return`, `Escape`, `space`, `Tab`, `ctrl+c`, …) |
+| `us act key KEYSYM` | keysym | | Press and release one key (XKB names: `Return`, `Escape`, `space`, `Tab`, `F1`, `Control_L`, …). Single keys only — chords are not supported; use `us act type` for text strings. |
 
 ---
 
@@ -46,12 +46,12 @@ Uses xdotool (X11 via gamescope Xwayland) when a game is running, wlrctl (Waylan
 | Command | Arguments | Key options | Description |
 |---------|-----------|-------------|-------------|
 | `us scene capture` | | `--out PATH` `--output HEADLESS-1` `--crop "x,y WxH"` | Capture headless display to PNG; prints saved path |
-| `us scene wait-for REF` | ref name or path | `--timeout 90` `--threshold 0.85` `--poll 2` | Block until ref appears; exits 0 on match, 3 on timeout |
+| `us scene wait-for REF` | ref name or path | `--timeout 90` `--threshold 0.85` `--poll 2` `--slug SLUG` `--refs-dir DIR` | Block until ref appears; exits 0 on match, 3 on timeout |
 | `us scene wait-quiescent` | | `--frames 5` `--poll 0.5` `--timeout 30` | Block until screen stops changing |
 | `us scene diff A B` | two image paths | `--method template\|phash\|pixelmatch` | Compare images; exits 0 if similar, 4 if not |
 
-`us scene wait-for` accepts a bare ref name (looks in the default `refs/` dir)
-or a full path to a `.png` file.
+`us scene wait-for` accepts a full path to a `.png`, or a bare ref name resolved
+via `--slug`/`--refs-dir` (e.g. `us scene wait-for main_menu --slug timberborn`).
 
 ---
 

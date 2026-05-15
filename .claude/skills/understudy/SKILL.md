@@ -62,10 +62,11 @@ All coordinates are absolute pixels within the **1920×1080** HEADLESS-1 output.
 
 ### 6. Wait for a game state
 ```bash
-# Wait until a ref image appears on screen (returns match score + location):
-us scene wait-for main_menu --refs-dir games/timberborn/refs --timeout 120
-# Or use --slug shorthand:
-us scene wait-for main_menu --slug timberborn --timeout 120   # (if wait-for gains --slug; use --refs-dir otherwise)
+# Wait until a ref image appears (bare name resolved via --slug):
+us scene wait-for main_menu --slug timberborn --timeout 120
+
+# Or supply the full path directly:
+us scene wait-for games/timberborn/refs/main_menu.png --timeout 120
 
 # Wait until the screen stops changing:
 us scene wait-quiescent --timeout 30

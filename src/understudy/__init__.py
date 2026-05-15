@@ -8,8 +8,8 @@ Typical agent usage::
 
     PROFILE = load_profile("timberborn")
 
-    with Stack(), GameSession(PROFILE) as game:
-        waits.for_template(PROFILE.refs.main_menu, timeout=90)
+    with Stack(), GameSession(PROFILE.appid) as game:
+        waits.for_template(PROFILE.refs.path(PROFILE.ready_ref), timeout=90)
         Compositor().click(*PROFILE.coords.new_game_button)
         Screen().save(PROFILE.artifact_path("post_click.png"))
 """

@@ -551,19 +551,39 @@ def game_scaffold(
 
 @scene_app.command("wait-for")
 def scene_wait_for(
-    ref_name: str = typer.Argument(..., help="Reference name or path to a PNG."),
+    ref_name: str = typer.Argument(..., help="Ref name, path to a PNG, or bare name resolved via --slug/--refs-dir."),
     timeout: float = typer.Option(90.0, "--timeout", "-t"),
     threshold: float = typer.Option(0.85, "--threshold"),
     poll: float = typer.Option(2.0, "--poll"),
+    refs_dir: str = typer.Option("", "--refs-dir", help="Refs directory for resolving bare ref names."),
+    slug: str = typer.Option("", "--slug", "-s", help="Game profile slug — resolves refs-dir automatically."),
     as_json: bool = typer.Option(False, "--json"),
 ) -> None:
-    """Block until a reference image appears on screen (or timeout)."""
+    """Block until a reference image appears on screen (or timeout).
+
+    REF_NAME can be a full path to a PNG, or a bare ref name resolved via
+    --slug / --refs-dir (e.g. 'main_menu' with --slug timberborn).
+    """
     from .waits import for_template
     from .errors import UnderstudyError
-    from pathlib import Path
 
-    # Resolve: could be a name in the profile refs, or a bare path.
-    ref: Path | str = Path(ref_name) if Path(ref_name).exists() else ref_name
+    # Resolution order:
+    # 1. Existing path — use directly.
+    # 2. Bare name + slug/refs-dir — look up in the resolved refs directory.
+    # 3. Fall through — let for_template raise a descriptive error.
+    ref: Path | str = Path(ref_name)
+    if not ref.exists():
+        if slug or refs_dir:
+            try:
+                resolved_dir = _resolve_refs_dir(refs_dir, slug)
+                candidate = resolved_dir / f"{ref_name}.png"
+                ref = candidate if candidate.exists() else Path(ref_name)
+            except FileNotFoundError as e:
+                typer.echo(f"Error: {e}", err=True)
+                raise typer.Exit(2)
+        else:
+            ref = ref_name  # pass string through; for_template raises TemplateMissError
+
     try:
         score, loc = for_template(ref, timeout=timeout, threshold=threshold, poll=poll)
         if as_json:
