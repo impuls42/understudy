@@ -63,6 +63,54 @@ def version() -> None:
     typer.echo(__version__)
 
 
+@app.command()
+def status(as_json: bool = typer.Option(False, "--json")) -> None:
+    """Show overall status: stack health, active game, and display info."""
+    from .stack import Stack
+    from .session import active_unit_name
+    from ._runtime import wayland_display, wayland_socket
+
+    # Gather stack info — may fail if D-Bus is unavailable.
+    try:
+        st = Stack.status()
+        stack_ok = True
+    except UnderstudyError as e:
+        st = None
+        stack_ok = False
+        stack_err = str(e)
+
+    # Gather game info — same caveat.
+    try:
+        game_unit = active_unit_name()
+    except UnderstudyError:
+        game_unit = None
+
+    if as_json:
+        data: dict = {
+            "stack": st if stack_ok else {"error": stack_err},
+            "game": {"unit": game_unit, "active": game_unit is not None},
+        }
+        typer.echo(_json_mod.dumps(data, indent=2, default=str))
+        return
+
+    # Human-readable output.
+    if not stack_ok:
+        typer.echo(f"stack:   error  ({stack_err})", err=False)
+    else:
+        sway = st["sway"]
+        vnc  = st["wayvnc"]
+        health = "healthy" if st["healthy"] else "degraded"
+        sock   = "✓" if sway["socket_exists"] else "✗"
+        typer.echo(f"stack:   {health}")
+        typer.echo(f"  sway:    {sway['active_state']}  (socket {sock}  display {sway['wayland_display']})")
+        typer.echo(f"  wayvnc:  {vnc['active_state']}  (:{vnc['port']})")
+
+    if game_unit:
+        typer.echo(f"game:    {game_unit}")
+    else:
+        typer.echo("game:    none")
+
+
 # ---------------------------------------------------------------------------
 # stack
 # ---------------------------------------------------------------------------
@@ -114,7 +162,11 @@ def stack_down(
 def stack_status(as_json: bool = typer.Option(False, "--json")) -> None:
     """Show stack state: sway/wayvnc unit states, socket presence, IPC socket."""
     from .stack import Stack
-    st = Stack.status()
+    try:
+        st = Stack.status()
+    except UnderstudyError as e:
+        _err(e, as_json)
+        return
     if as_json:
         typer.echo(_json_mod.dumps(st, indent=2, default=str))
     else:
@@ -420,7 +472,11 @@ def game_is_running(as_json: bool = typer.Option(False, "--json")) -> None:
 def game_status(as_json: bool = typer.Option(False, "--json")) -> None:
     """Show the active game session unit state."""
     from .session import active_unit_name
-    name = active_unit_name()
+    try:
+        name = active_unit_name()
+    except UnderstudyError as e:
+        _err(e, as_json)
+        return
     data: dict = {"unit": name, "active": name is not None}
     if as_json:
         typer.echo(_json_mod.dumps(data))

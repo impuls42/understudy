@@ -43,9 +43,20 @@ _UNIT_SRC_DIR = Path(__file__).parent.parent.parent / "systemd"
 
 
 def _user_bus() -> DBus:
-    bus = DBus(user_mode=True)
-    bus.open()
-    return bus
+    try:
+        from pystemd.dbusexc import DBusBaseError
+        bus = DBus(user_mode=True)
+        bus.open()
+        return bus
+    except Exception as exc:
+        # DBusBaseError (and OSError on missing socket) both mean no D-Bus session.
+        raise PreconditionError(
+            f"Cannot connect to the user D-Bus session: {exc}",
+            hint=(
+                "Run this command from the same user session that owns the "
+                "understudy services (e.g. the login shell, not su/sudo)."
+            ),
+        ) from exc
 
 
 def _manager(bus: DBus) -> Manager:

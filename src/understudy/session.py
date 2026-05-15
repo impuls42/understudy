@@ -28,9 +28,18 @@ _GAMESCOPE = "/usr/games/gamescope"
 
 
 def _user_bus() -> DBus:
-    bus = DBus(user_mode=True)
-    bus.open()
-    return bus
+    try:
+        bus = DBus(user_mode=True)
+        bus.open()
+        return bus
+    except Exception as exc:
+        raise PreconditionError(
+            f"Cannot connect to the user D-Bus session: {exc}",
+            hint=(
+                "Run this command from the same user session that owns the "
+                "understudy services (e.g. the login shell, not su/sudo)."
+            ),
+        ) from exc
 
 
 def _unit_active(name: str, bus: DBus) -> bool:
