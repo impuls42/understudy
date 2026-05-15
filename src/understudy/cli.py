@@ -648,18 +648,105 @@ def _refs_dir() -> Path:
     return _DEFAULT_REFS_DIR
 
 
+def _resolve_refs_dir(refs_dir: str, slug: str) -> Path:
+    """Return the refs directory, preferring --slug → profile, then --refs-dir, then default."""
+    if slug:
+        from .profile import load_profile
+        return load_profile(slug).refs_dir
+    return Path(refs_dir) if refs_dir else _refs_dir()
+
+
+def _ref_record_interactive(store) -> None:  # store: RefStore
+    """Interactive loop: prompt for name → capture → show score → confirm → save → repeat."""
+    import tempfile
+    from .capture import Screen
+    from . import compare as cmp
+
+    typer.echo(f"Refs dir:  {store.directory}")
+    existing = store.list()
+    typer.echo(f"Existing:  {', '.join(existing) if existing else '(none)'}")
+    typer.echo("Enter a blank name or Ctrl-C to finish.\n")
+
+    while True:
+        try:
+            name = typer.prompt("Name").strip()
+        except (KeyboardInterrupt, EOFError):
+            typer.echo("\nDone.")
+            return
+        if not name:
+            typer.echo("Done.")
+            return
+
+        tmp = Path(tempfile.mktemp(suffix=".png", prefix="us-ref-"))
+        try:
+            Screen().save(path=tmp)
+        except UnderstudyError as e:
+            typer.echo(f"  Capture failed: {e}", err=True)
+            continue
+
+        typer.echo(f"  Captured  → {tmp}")
+
+        if store.exists(name):
+            try:
+                _, score, _ = cmp.template(str(store.path(name)), str(tmp))
+                label = "match" if score >= 0.85 else "no match"
+                typer.echo(f"  Existing '{name}': score {score:.3f} ({label})")
+            except Exception:
+                pass
+
+        try:
+            save = typer.confirm(f"  Save as '{name}'?", default=True)
+        except (KeyboardInterrupt, EOFError):
+            tmp.unlink(missing_ok=True)
+            typer.echo("\nDone.")
+            return
+
+        if save:
+            dest = store.record(name, source=tmp)
+            typer.echo(f"  Saved     → {dest}")
+        else:
+            typer.echo("  Skipped.")
+
+        tmp.unlink(missing_ok=True)
+        typer.echo()
+
+
 @ref_app.command("record")
 def ref_record(
-    name: str = typer.Argument(..., help="Reference name (no extension)."),
-    from_file: str = typer.Option("", "--from-file", help="Record from this PNG instead of screen."),
-    refs_dir: str = typer.Option("", "--refs-dir", help="Override default refs directory."),
+    name: str | None = typer.Argument(None, help="Reference name (no .png). Omit to run an interactive session."),
+    from_file: str = typer.Option("", "--from-file", help="Use this PNG instead of a live capture (single-shot only)."),
+    refs_dir: str = typer.Option("", "--refs-dir", help="Override refs directory."),
+    slug: str = typer.Option("", "--slug", "-s", help="Game profile slug — resolves refs-dir from the profile automatically."),
     as_json: bool = typer.Option(False, "--json"),
 ) -> None:
-    """Capture the current screen (or --from-file) and save as a reference."""
+    """Capture the current screen and save as a named reference image.
+
+    Without NAME, runs an interactive session: prompt → capture → score → confirm → repeat.
+    Use --slug to resolve the refs directory from a game profile automatically.
+    """
     from .refs import RefStore
-    store = RefStore(refs_dir if refs_dir else _refs_dir())
+
+    try:
+        resolved_dir = _resolve_refs_dir(refs_dir, slug)
+    except FileNotFoundError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(2)
+
+    store = RefStore(resolved_dir)
+
+    if name is None:
+        if as_json:
+            typer.echo('{"error": "--json is not supported in interactive mode"}', err=True)
+            raise typer.Exit(2)
+        _ref_record_interactive(store)
+        return
+
     source = Path(from_file) if from_file else None
-    p = store.record(name, source=source)
+    try:
+        p = store.record(name, source=source)
+    except UnderstudyError as e:
+        _err(e, as_json)
+        return
     if as_json:
         typer.echo(_json_mod.dumps({"ok": True, "name": name, "path": str(p)}))
     else:
