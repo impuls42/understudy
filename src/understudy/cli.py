@@ -293,6 +293,18 @@ def doctor(
             raise _SkipCheck("no gamescope X server (launch a game first)")
     _safe_check("gamescope-input-probe", _gamescope_input_probe)
 
+    def _libei_available():
+        from .libei_backend import find_gamescope_eis_socket
+        socket = find_gamescope_eis_socket()
+        if socket is None:
+            raise _SkipCheck(
+                "no gamescope-*-ei socket (gamescope not running, or built "
+                "without -Dinput_emulation=enabled)"
+            )
+        # Socket exists. We don't open it here (handshake is per-game), just
+        # report it's reachable.
+    _safe_check("libei-available", _libei_available)
+
     if game_probe:
         def _game_input_probe():
             from .session import active_unit_name
@@ -326,7 +338,10 @@ act_app = typer.Typer(no_args_is_help=True, help="Inject synthetic input into th
 app.add_typer(act_app, name="act")
 
 
-_BACKEND_HELP = "Input backend: wlrctl (default), xdotool, or auto."
+_BACKEND_HELP = (
+    "Input backend: auto (default — xdotool if gamescope is up, else wlrctl), "
+    "xdotool, wlrctl, or libei (direct to gamescope's libeis socket)."
+)
 
 
 def _apply_verbose(verbose: bool) -> None:

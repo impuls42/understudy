@@ -1,20 +1,28 @@
 """Compositor input: click, move, type, key, scroll.
 
-Two input backends, auto-selected based on whether gamescope is running:
+Three input backends:
 
-1. **xdotool** (X11, default when gamescope is up): events injected directly
-   into gamescope's nested Xwayland (`DISPLAY=:N`). Empirically the only path
-   that reaches Steam-launched Unity-under-Proton games on this stack (verified
-   against Timberborn). Does NOT depend on `_NET_ACTIVE_WINDOW` (gamescope's
-   Xwayland doesn't implement it).
+1. **xdotool** (X11, auto-default when gamescope is up): events injected
+   directly into gamescope's nested Xwayland (`DISPLAY=:N`). Empirically the
+   only path that reliably reaches Steam-launched Unity-under-Proton games on
+   this stack (verified against Timberborn). Does NOT depend on
+   `_NET_ACTIVE_WINDOW` (gamescope's Xwayland doesn't implement it).
 
-2. **wlrctl** (Wayland, default when no gamescope): virtual pointer/keyboard
-   events to sway via wlr-virtual-pointer-unstable-v1 / -keyboard-unstable-v1.
-   Sway forwards to its focused client. Reaches simple X11 clients inside
-   gamescope (e.g. xeyes) but empirically does NOT deliver clicks to Steam
-   games — useful for the `us xeyes` rig and direct sway clients only.
+2. **wlrctl** (Wayland, auto-default when no gamescope): virtual pointer/
+   keyboard events to sway via wlr-virtual-pointer-unstable-v1 /
+   -keyboard-unstable-v1. Sway forwards to its focused client. Reaches
+   simple X11 clients inside gamescope (e.g. xeyes) but does NOT deliver
+   clicks to Steam games — useful for the `us xeyes` rig.
 
-Override with `--backend xdotool|wlrctl|auto` or `UNDERSTUDY_BACKEND=...`.
+3. **libei** (opt-in via `--backend libei`): events go directly to gamescope's
+   libeis socket (`$XDG_RUNTIME_DIR/gamescope-*-ei`), bypassing sway. Cursor
+   positioning works (verified against xeyes). Empirically does NOT dismiss
+   Timberborn UI dialogs the way xdotool does on this stack — gamescope
+   appears to route libei pointer-button events to its own seat without
+   forwarding through to the nested Xwayland → Unity layer. Kept as opt-in
+   for direct gamescope control and future investigation.
+
+Override with `--backend xdotool|wlrctl|libei|auto` or `UNDERSTUDY_BACKEND=...`.
 Set `UNDERSTUDY_VERBOSE=1` (or `--verbose` on `us act ...`) to log every
 injected command + exit code to stderr.
 
@@ -38,7 +46,7 @@ from typing import Literal
 from ._runtime import wayland_env
 from .errors import ExternalCommandError
 
-Backend = Literal["xdotool", "wlrctl", "auto"]
+Backend = Literal["xdotool", "wlrctl", "libei", "auto"]
 
 # Larger than any reasonable display dimension; sway clamps to (0, 0).
 _CLAMP_DELTA = 32768
@@ -242,7 +250,7 @@ def resolve_backend(backend: Backend = "auto") -> str:
     drops wlrctl events for Steam games.
     """
     b = backend if backend != "auto" else os.environ.get("UNDERSTUDY_BACKEND", "auto")
-    if b in ("xdotool", "wlrctl"):
+    if b in ("xdotool", "wlrctl", "libei"):
         return b
     if _gamescope_xdisplay() is not None:
         return "xdotool"
@@ -418,7 +426,10 @@ class Compositor:
     def move(self, x: int, y: int, backend: Backend = "auto") -> None:
         """Move the virtual pointer to absolute position (x, y)."""
         b = resolve_backend(backend)
-        if b == "xdotool":
+        if b == "libei":
+            from .libei_backend import get_libei_backend
+            get_libei_backend().move(x, y)
+        elif b == "xdotool":
             _xdotool_move(x, y)
         else:
             _wlrctl_move_abs(x, y)
@@ -433,7 +444,11 @@ class Compositor:
     ) -> None:
         """Move to (x, y) then press and release *button*."""
         b = resolve_backend(backend)
-        if b == "xdotool":
+        if b == "libei":
+            from .libei_backend import get_libei_backend
+            time.sleep(delay)
+            get_libei_backend().click(x, y, button=button)
+        elif b == "xdotool":
             time.sleep(delay)
             _xdotool_click(x, y, button)
         else:
@@ -461,9 +476,19 @@ class Compositor:
                 _wlrctl("pointer", "scroll", "horizontal", str(dx))
 
     def type(self, text: str, backend: Backend = "auto") -> None:
-        """Type a string of characters."""
+        """Type a string of characters.
+
+        Note: libei has no string-input concept (only individual keycodes
+        with manual XKB-layout handling), so even with `backend=libei` this
+        falls back to xdotool when gamescope is available, otherwise wlrctl.
+        """
         b = resolve_backend(backend)
-        if b == "xdotool":
+        if b == "libei":
+            if _gamescope_xdisplay() is not None:
+                _xdotool_type(text)
+            else:
+                _wlrctl("keyboard", "type", text)
+        elif b == "xdotool":
             _xdotool_type(text)
         else:
             _wlrctl("keyboard", "type", text)
@@ -471,7 +496,10 @@ class Compositor:
     def key(self, keysym: str, backend: Backend = "auto") -> None:
         """Press and release a single key by its XKB keysym name (e.g. 'Return', 'Escape')."""
         b = resolve_backend(backend)
-        if b == "xdotool":
+        if b == "libei":
+            from .libei_backend import get_libei_backend
+            get_libei_backend().key(keysym)
+        elif b == "xdotool":
             _xdotool_key(keysym)
         else:
             # wlrctl 0.2.2 has no combined key command — emit press then release
