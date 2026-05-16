@@ -199,7 +199,16 @@ def stack_install(
 # ---------------------------------------------------------------------------
 
 @app.command()
-def doctor(as_json: bool = typer.Option(False, "--json")) -> None:
+def doctor(
+    as_json: bool = typer.Option(False, "--json"),
+    game_probe: bool = typer.Option(
+        False,
+        "--game-probe",
+        help="Also probe whether input reaches the running game (key+mouse sweep, "
+             "phash diff). Opt-in because some game states (loading screens, "
+             "fully static menus) legitimately produce no visible change.",
+    ),
+) -> None:
     """Run smoke checks (design doc §4.3). Exits 0 if all pass."""
     from ._runtime import wayland_env
     from .stack import Stack
@@ -207,14 +216,24 @@ def doctor(as_json: bool = typer.Option(False, "--json")) -> None:
 
     checks: list[dict] = []
 
+    class _SkipCheck(Exception):
+        """Raised inside a check fn to mark it skipped (not failed)."""
+
     def check(name: str, fn) -> bool:
         try:
             fn()
             checks.append({"name": name, "pass": True})
             return True
+        except _SkipCheck as s:
+            checks.append({"name": name, "pass": True, "skipped": str(s)})
+            return True
         except Exception as e:
             checks.append({"name": name, "pass": False, "error": str(e)})
             return False
+
+    # Alias for readability — same as check(); separate name for checks that
+    # are EXPECTED to skip in some configurations (e.g. no game running).
+    _safe_check = check
 
     def _xdg_runtime_dir_sane():
         import os
@@ -260,22 +279,40 @@ def doctor(as_json: bool = typer.Option(False, "--json")) -> None:
 
     check("grim-capture", _grim_capture)
 
-    def _input_probe():
-        from .input import probe
-        result = probe()
-        # `probe()` returns a dict on success/skip and raises on failure.
-        if result.get("result", "").startswith("skipped"):
-            # No gamescope active — nothing to verify at the X11 layer.
-            return
-    check("input-probe", _input_probe)
+    def _sway_input_probe():
+        from .input import probe_sway
+        probe_sway()
+    check("sway-input-probe", _sway_input_probe)
+
+    def _gamescope_input_probe():
+        from .input import probe_gamescope
+        result = probe_gamescope()
+        if result is None:
+            # No gamescope running. Skip without failing — this check is only
+            # meaningful when a game session is active.
+            raise _SkipCheck("no gamescope X server (launch a game first)")
+    _safe_check("gamescope-input-probe", _gamescope_input_probe)
+
+    if game_probe:
+        def _game_input_probe():
+            from .session import active_unit_name
+            if active_unit_name() is None:
+                raise _SkipCheck("no active game unit")
+            from .input import probe_game
+            probe_game()
+        _safe_check("game-input-probe", _game_input_probe)
 
     all_pass = all(c["pass"] for c in checks)
     if as_json:
         typer.echo(_json_mod.dumps({"ok": all_pass, "checks": checks}, indent=2))
     else:
         for c in checks:
-            mark = "✓" if c["pass"] else "✗"
-            suffix = f"  — {c['error']}" if not c["pass"] else ""
+            if "skipped" in c:
+                mark, suffix = "○", f"  — skipped: {c['skipped']}"
+            elif c["pass"]:
+                mark, suffix = "✓", ""
+            else:
+                mark, suffix = "✗", f"  — {c['error']}"
             typer.echo(f"  {mark}  {c['name']}{suffix}")
     if not all_pass:
         raise typer.Exit(1)
@@ -547,6 +584,40 @@ def game_list(as_json: bool = typer.Option(False, "--json")) -> None:
     else:
         for p in profiles:
             typer.echo(p)
+
+
+@game_app.command("probe")
+def game_probe(
+    key: str = typer.Option("Escape", "--key", help="Key to press as the first probe strategy."),
+    as_json: bool = typer.Option(False, "--json"),
+) -> None:
+    """Verify input actually reaches the running game (key press → mouse sweep).
+
+    Sends a benign event, snapshots the screen, and checks for a visible
+    change. If the key didn't change anything, sweeps the mouse as a second
+    strategy. Exits non-zero if neither produced a change — that's the strong
+    signal input is being dropped end-to-end.
+
+    Only meaningful when a game is running; reports a clean error otherwise.
+    """
+    from .session import active_unit_name
+    from .input import probe_game
+    if active_unit_name() is None:
+        msg = "No active game unit. Launch a game first: `us game launch <slug>`."
+        if as_json:
+            typer.echo(_json_mod.dumps({"ok": False, "code": 2, "reason": msg}))
+        else:
+            typer.echo(msg, err=True)
+        raise typer.Exit(2)
+    try:
+        result = probe_game(key=key)
+        if as_json:
+            typer.echo(_json_mod.dumps({"ok": True, **result}))
+        else:
+            typer.echo(f"  ✓ {result['result']}  (strategy: {result['strategy']})")
+            typer.echo(f"    phash distances: {result['phash_distances']}")
+    except UnderstudyError as e:
+        _err(e, as_json)
 
 
 @game_app.command("show")

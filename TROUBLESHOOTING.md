@@ -20,7 +20,14 @@ Common failure modes and how to diagnose them. If none of these apply, see [Repo
 
 ## Input not reaching the game
 
-`us doctor`'s `input-probe` only verifies the cursor lands at the right gamescope-Xwayland coordinate; it does NOT verify the click event reaches the game's UI. Unity-under-Proton has several layers between you and the game's input handler. Bisect with:
+`us doctor`'s `sway-input-probe` only checks that wlrctl talks to sway. `gamescope-input-probe` only verifies the cursor LANDS at the right gamescope-Xwayland coordinate. **Neither verifies that clicks or key presses are consumed by the game's UI.** For an end-to-end check, use:
+
+```bash
+us game probe                       # one-shot: key + mouse sweep + phash diff
+us doctor --game-probe              # includes the probe in the standard checks
+```
+
+The probe reports "inconclusive" when neither strategy produces a visible change. That can mean input is dropped *or* the game is in a non-interactive state (loading screen, intro video, fully static menu). Bisect more carefully with:
 
 ```bash
 # 1. Cursor positioning. Does the cursor land where you asked?

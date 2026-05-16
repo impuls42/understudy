@@ -12,7 +12,7 @@ Exit codes: **0** ok · **2** precondition error · **3** timeout · **4** templ
 |---------|-------------|
 | `us version` | Print installed version |
 | `us status [--json]` | Stack health + active game unit at a glance |
-| `us doctor [--json]` | Run smoke checks: sway, socket, wayvnc port, HEADLESS-1 output, grim capture, **input probe** (default backend reachable) |
+| `us doctor [--json] [--game-probe]` | Smoke checks: sway, socket, wayvnc port, HEADLESS-1 output, grim, `sway-input-probe`, `gamescope-input-probe` (when gamescope is up). `--game-probe` also runs an end-to-end probe (key + mouse sweep + phash diff) when a game is active. |
 
 ---
 
@@ -108,6 +108,7 @@ game profile automatically (equivalent to `--refs-dir games/<slug>/refs`).
 | `us game status` | | | Show active unit name and state |
 | `us game list` | | | List available game profile slugs |
 | `us game show SLUG` | slug | `--json` | Pretty-print profile (appid, resolution, named coords, refs). Use this to find click targets — never guess. |
+| `us game probe` | | `--key Escape` | End-to-end input probe: send a key, then sweep the mouse, verify the screen changes (phash). Reports inconclusive when both produce no visible change — could mean input is dropped, OR the game state is inert. |
 | `us game scaffold SLUG` | slug | `--appid ID` `--display-name NAME` | Generate a new game profile directory from the template |
 
 ---

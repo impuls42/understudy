@@ -249,38 +249,42 @@ def resolve_backend(backend: Backend = "auto") -> str:
     return "wlrctl"
 
 
-def probe() -> dict:
-    """End-to-end input round-trip probe.
+def probe_sway() -> dict:
+    """Cheap liveness check: wlrctl can dispatch a pointer event to sway.
 
-    When gamescope is running, always uses `xdotool getmouselocation` against
-    gamescope's Xwayland as the readback — that's the strongest signal that
-    input reached the game's coordinate space, regardless of which backend
-    did the injection.
-
-    When gamescope is NOT running, falls back to a wlrctl exit-code check
-    (no Wayland API exists to read seat-cursor position back).
+    Confirms the wl_seat / wlr-virtual-pointer protocol is reachable. Says
+    nothing about whether events reach gamescope or the game — that's what
+    probe_gamescope() and probe_game() are for.
     """
-    backend = resolve_backend("auto")
+    _wlrctl("pointer", "move", "0", "0")
+    return {"backend": "wlrctl", "result": "sway accepted virtual pointer move"}
+
+
+def probe_gamescope() -> dict | None:
+    """Round-trip probe through gamescope's Xwayland.
+
+    Injects a mousemove via the auto-selected backend, then reads the cursor
+    position back via xdotool from gamescope's Xwayland. Verifies the cursor
+    landed in the requested gamescope-coordinate space. Returns None when no
+    gamescope is running (skip cleanly rather than raise).
+
+    Verifies cursor positioning. Does NOT verify that the event was processed
+    by the game itself — Unity/Proton may receive a positioned cursor but
+    ignore the click. Use probe_game() for that.
+    """
     display = _gamescope_xdisplay()
-
     if display is None:
-        # No gamescope to read back from. Just verify the backend's tool is
-        # functional and sway accepted the protocol message.
-        if backend == "wlrctl":
-            _wlrctl("pointer", "move", "0", "0")
-            return {"backend": "wlrctl", "result": "wlrctl pointer move accepted by sway"}
-        return {"backend": "xdotool", "result": "skipped: no gamescope X server"}
+        return None
 
+    backend = resolve_backend("auto")
     target_x, target_y = 100, 100
     env = {**os.environ, "DISPLAY": display}
 
-    # Inject via the active backend.
     if backend == "wlrctl":
         _wlrctl_move_abs(target_x, target_y)
     else:
         _xdotool_move(target_x, target_y, xdisplay=display)
 
-    # Read back from gamescope's Xwayland regardless of which backend injected.
     r = _run(["xdotool", "getmouselocation", "--shell"], env=env)
     if r.returncode != 0:
         raise ExternalCommandError(
@@ -295,13 +299,13 @@ def probe() -> dict:
     actual_y = int(pos.get("Y", "-1"))
     if abs(actual_x - target_x) > 2 or abs(actual_y - target_y) > 2:
         raise ExternalCommandError(
-            f"Input probe FAILED: backend={backend!r} injected ({target_x}, {target_y}) "
-            f"but gamescope's Xwayland reports cursor at ({actual_x}, {actual_y}). "
-            f"The {backend} → gamescope → game path is not delivering events.",
+            f"Gamescope-input probe FAILED: backend={backend!r} injected "
+            f"({target_x}, {target_y}) but gamescope's Xwayland reports cursor at "
+            f"({actual_x}, {actual_y}). The {backend} → gamescope path is dropping "
+            f"or rerouting pointer events.",
             hint=(
                 f"Try --backend {'xdotool' if backend == 'wlrctl' else 'wlrctl'} to "
-                "isolate which leg is dropping events. See 'Known limitations' in "
-                "references/cli-reference.md."
+                "isolate. See TROUBLESHOOTING.md."
             ),
         )
     return {
@@ -310,6 +314,94 @@ def probe() -> dict:
         "target": [target_x, target_y],
         "actual": [actual_x, actual_y],
     }
+
+
+def probe_game(key: str = "Escape", settle: float = 0.6, max_phash_dist: int = 4) -> dict:
+    """End-to-end probe: verify input causes visible game-side state change.
+
+    Tries two strategies before concluding input is broken:
+
+    1. Press *key* (default Escape). Most games open/toggle a menu — if so,
+       the second press restores the prior screen.
+    2. If the key produced no change, sweep the mouse from (100, 100) to
+       near the far corner — most game UIs show hover-state changes on
+       interactive widgets, which the perceptual hash will catch.
+
+    Only raises ExternalCommandError when *both* strategies produce no
+    visible change. That's the signal input is dropped end-to-end — not
+    just "Escape happens to be a no-op in this game state".
+
+    Caller is responsible for ensuring a game is actually running.
+    """
+    from .capture import Screen
+    from . import compare as cmp
+
+    screen = Screen()
+    before = screen.grab()
+    distances: dict[str, int] = {}
+
+    comp = Compositor()
+
+    # Strategy 1: key press (default Escape).
+    comp.key(key)
+    time.sleep(settle)
+    after_key = screen.grab()
+    similar, dist_key = cmp.phash(before, after_key, max_distance=max_phash_dist)
+    distances["key"] = dist_key
+    if not similar:
+        # Best-effort restore: another press usually closes the menu the first
+        # press opened. If destructive on a specific game, the caller can
+        # pass a different *key*.
+        try:
+            comp.key(key)
+        except Exception:
+            pass
+        return {
+            "changed": True,
+            "strategy": f"key={key!r}",
+            "phash_distances": distances,
+            "result": "screen changed — input reached the game",
+        }
+
+    # Strategy 2: mouse sweep. Most interactive UIs reveal hover state.
+    comp.move(100, 100)
+    time.sleep(0.15)
+    comp.move(1820, 980)
+    time.sleep(0.3)
+    after_move = screen.grab()
+    similar, dist_move = cmp.phash(before, after_move, max_distance=max_phash_dist)
+    distances["mouse_sweep"] = dist_move
+    if not similar:
+        try:
+            comp.move(100, 100)
+        except Exception:
+            pass
+        return {
+            "changed": True,
+            "strategy": "mouse_sweep",
+            "phash_distances": distances,
+            "result": "screen changed via mouse sweep — input reached the game",
+        }
+
+    # Both strategies produced no change.
+    raise ExternalCommandError(
+        f"Game-input probe inconclusive: pressing {key!r} (phash dist "
+        f"{dist_key}) and sweeping the mouse (phash dist {dist_move}) "
+        "produced no visible screen change. Either input is being dropped "
+        "end-to-end OR the game is in a non-interactive state (loading "
+        "screen, intro video, fully static menu). Retry once the game is "
+        "interactive.",
+        hint="See TROUBLESHOOTING.md > Input not reaching the game.",
+    )
+
+
+# Backward-compat alias: older callers / external skill docs use probe().
+def probe() -> dict:
+    """Legacy entry point. Prefer probe_sway / probe_gamescope / probe_game."""
+    result = probe_gamescope()
+    if result is not None:
+        return result
+    return probe_sway()
 
 
 class Compositor:
