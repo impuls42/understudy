@@ -13,6 +13,12 @@ PROFILE = GameProfile(
         # Startup
         mods_dialog_ok=(960, 826),      # "OK" on mod load-order dialog at startup
 
+        # Save-load mod-mismatch dialog (appears after clicking Continue when
+        # the save's mod set differs from the active set). Pressing Return
+        # also confirms (defaults to Так / Yes).
+        mods_mismatch_no=(865, 775),    # Ні — cancel load
+        mods_mismatch_yes=(1049, 775),  # Так — proceed with active mods
+
         # Main menu buttons (all x=960, measured from pixel analysis)
         mm_continue=(960, 365),         # Продовжити
         mm_new_game=(960, 406),         # Нова гра

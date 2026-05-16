@@ -154,6 +154,13 @@ All commands: `--json` → structured stdout, non-zero exit → `{"ok":false,"co
 
 ---
 
+## Troubleshooting & reporting issues
+
+See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for common failure modes and the
+list of diagnostics to include when opening an issue.
+
+---
+
 ## Known issues / deferred items
 
 1. **Stray Steam daemon**: if another Steam is running for this user when

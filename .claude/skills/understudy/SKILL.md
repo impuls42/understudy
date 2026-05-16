@@ -68,6 +68,13 @@ us act move 500 300            # move pointer without clicking
 ```
 All coordinates are absolute pixels within the **1920×1080** HEADLESS-1 output.
 
+Auto-default backend: **xdotool** when gamescope is running, **wlrctl**
+otherwise. `us doctor` includes an end-to-end round-trip probe that verifies
+the cursor lands at the right gamescope-Xwayland coordinate. If a click
+"succeeds" at the CLI but the game doesn't respond, re-run with `-v` to
+see every injected subprocess on stderr, or try `--backend wlrctl` /
+`--backend xdotool` to isolate which leg of the chain is dropping events.
+
 ### 6. Wait for a game state
 ```bash
 # Wait until a ref image appears (bare name resolved via --slug):
@@ -79,6 +86,18 @@ us scene wait-for games/timberborn/refs/main_menu.png --timeout 120
 # Wait until the screen stops changing:
 us scene wait-quiescent --timeout 30
 ```
+
+**If `wait-for` times out** the error message includes the best similarity
+score, where it was found, and a path to a saved capture of the actual
+screen (`/tmp/understudy-wait-miss-*.png`). To diagnose:
+
+- **Best score ≥ 0.70 but < 0.85**: the ref is close but the screen drifted
+  (mod versions, locale, UI tweaks). Re-record: `us ref record <name> --slug <slug>`.
+- **Best score < 0.50**: the screen is showing something different. Open the
+  saved miss-capture with the Read tool to see what's actually there. Common
+  culprits: an undismissed dialog, a loading screen, or the game crashed.
+- **`us scene wait-quiescent`**: useful when you're between known refs and
+  just need the UI to settle (loading screens, transitions).
 
 ### 7. Record a reference image
 ```bash
@@ -114,10 +133,15 @@ Every supported game has a profile at `games/<slug>/profile.py` that declares:
 - `ready_ref` — name of the ref that signals the game reached its main menu
 - `launch_timeout_s` — how long to wait for the ready ref
 
-To inspect a profile:
+To inspect a profile (lists all coords, refs, and metadata in a readable form):
 ```bash
-python3 -c "from understudy.profile import load_profile; p = load_profile('timberborn'); print(p)"
+us game show timberborn          # human-readable
+us game show timberborn --json   # for parsing
 ```
+
+Use this to discover named click coordinates — never guess. If the coord you
+need isn't in the profile, measure it from a screenshot (`us scene capture`)
+and propose adding it.
 
 ---
 
