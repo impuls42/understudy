@@ -14,6 +14,9 @@ dependencies = [
     "pillow>=10.0.0",
     "numpy>=1.26.0",
     "typer>=0.12.0",
+    # libei client for gamescope's libeis socket. No PyPI release; pin to a
+    # specific commit per the snegg author's "API is nowhere near stable" note.
+    "snegg @ git+https://gitlab.freedesktop.org/libinput/snegg@ef92bcd09a29599d5b233d8e21e0e38e507cdef8",
 ]
 
 [project.optional-dependencies]
