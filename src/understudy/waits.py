@@ -50,17 +50,48 @@ def for_template(
 
     screen = Screen()
     deadline = time.monotonic() + timeout
+    best_score = -1.0
+    best_loc: tuple[int, int] = (0, 0)
+    last_frame: Image.Image | None = None
 
     while time.monotonic() < deadline:
         frame = screen.grab(output=output)
+        last_frame = frame
         matched, score, loc = template_match(frame, ref, threshold=threshold)
+        if score > best_score:
+            best_score, best_loc = score, loc
         if matched:
             return score, loc
         time.sleep(poll)
 
+    # On miss, save the last frame so the agent can inspect what the screen
+    # actually looked like and compare against the (possibly stale) ref.
+    saved_to: Path | None = None
+    if last_frame is not None:
+        try:
+            from datetime import datetime, timezone
+            ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+            saved_to = Path("/tmp") / f"understudy-wait-miss-{ts}.png"
+            last_frame.save(str(saved_to), format="PNG")
+        except Exception:
+            saved_to = None
+
+    ref_name = (
+        Path(ref).name if isinstance(ref, (str, Path)) else "<inline>"
+    )
+    hint_lines = [
+        f"Best score was {best_score:.3f} at {best_loc} (threshold {threshold}).",
+    ]
+    if saved_to is not None:
+        hint_lines.append(f"Current frame saved to {saved_to} — compare with the ref.")
+    hint_lines.append(
+        "If the score is high but below threshold, the screen drifted from the ref "
+        "(re-record). If it's low, the screen is showing a different state."
+    )
     raise UnderstudyTimeoutError(
-        f"Template not matched within {timeout:.0f}s (best score < {threshold}).",
-        hint="Check `us scene capture` to see current screen state.",
+        f"Template {ref_name!r} not matched within {timeout:.0f}s "
+        f"(best score {best_score:.3f} < threshold {threshold}).",
+        hint=" ".join(hint_lines),
     )
 
 

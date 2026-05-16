@@ -12,7 +12,7 @@ Exit codes: **0** ok · **2** precondition error · **3** timeout · **4** templ
 |---------|-------------|
 | `us version` | Print installed version |
 | `us status [--json]` | Stack health + active game unit at a glance |
-| `us doctor [--json]` | Run smoke checks (sway, socket, wayvnc port, HEADLESS-1 output, grim capture) |
+| `us doctor [--json]` | Run smoke checks: sway, socket, wayvnc port, HEADLESS-1 output, grim capture, **input probe** (default backend reachable) |
 
 ---
 
@@ -30,14 +30,44 @@ Exit codes: **0** ok · **2** precondition error · **3** timeout · **4** templ
 ## `us act` — input injection
 
 All coordinates are absolute pixels in the 1920×1080 HEADLESS-1 output.
-Uses xdotool (X11 via gamescope Xwayland) when a game is running, wlrctl (Wayland) otherwise.
+
+Auto-default: **xdotool** when gamescope is running (the common case during a
+game session), **wlrctl** otherwise. Override with `--backend wlrctl|xdotool`
+or `UNDERSTUDY_BACKEND=...`. See "Known limitations" below for the rationale.
+
+All four commands accept:
+- `--backend wlrctl|xdotool|auto` (default: `auto`)
+- `--verbose` / `-v` (log every injected subprocess + exit code to stderr; equivalent to `UNDERSTUDY_VERBOSE=1`)
 
 | Command | Arguments | Key options | Description |
 |---------|-----------|-------------|-------------|
-| `us act click X Y` | x y | `--button left\|right\|middle` `--delay 0.05` | Move pointer then click |
-| `us act move X Y` | x y | | Move pointer without clicking |
-| `us act type TEXT` | text | | Type a string via virtual keyboard |
-| `us act key KEYSYM` | keysym | | Press and release one key (XKB names: `Return`, `Escape`, `space`, `Tab`, `F1`, `Control_L`, …). Single keys only — chords are not supported; use `us act type` for text strings. |
+| `us act click X Y` | x y | `--button left\|right\|middle` `--delay 0.05` `--backend ...` `-v` | Move pointer then click |
+| `us act move X Y` | x y | `--backend ...` `-v` | Move pointer without clicking |
+| `us act type TEXT` | text | `--backend ...` `-v` | Type a string via virtual keyboard |
+| `us act key KEYSYM` | keysym | `--backend ...` `-v` | Press and release one key (XKB names: `Return`, `Escape`, `space`, `Tab`, `F1`, `Control_L`, …). Single keys only — chords are not supported; use `us act type` for text strings. |
+
+### Known limitations and backend tradeoffs
+
+**The `us act` CLI exits 0 if the backend tool succeeded.** The doctor's
+input-probe (`us doctor`) does an end-to-end round-trip via
+`xdotool getmouselocation` against gamescope's Xwayland to verify the
+cursor actually landed there, but click *event delivery* to specific
+windows is harder to verify automatically. Use `us xeyes` to visually
+verify input under gamescope without needing a game.
+
+- **xdotool** (auto-default when gamescope is up): events go directly to
+  gamescope's nested Xwayland (`DISPLAY=:N`). Verified to reach Unity-under-
+  Proton games (Timberborn). Does NOT use `_NET_ACTIVE_WINDOW` (gamescope's
+  Xwayland doesn't advertise it) — events go to whichever window contains
+  the cursor.
+- **wlrctl** (auto-default when no gamescope): Wayland virtual pointer/keyboard
+  protocols → sway → forwarded to focused client. Reaches simple X11 clients
+  inside gamescope (e.g. xeyes) but empirically **does NOT reach Steam-launched
+  Unity games** on this stack — gamescope filters/reroutes the Wayland pointer
+  for Steam-tagged surfaces. Useful for the `us xeyes` rig and for any client
+  driven directly under sway. `wlrctl pointer move` is *relative*; the SDK
+  clamps to (0,0) via a large negative delta before each absolute move, so
+  two `wlrctl` invocations happen per click (visible with `-v`).
 
 ---
 
@@ -77,7 +107,37 @@ game profile automatically (equivalent to `--refs-dir games/<slug>/refs`).
 | `us game is-running` | | | Exits 0 if a game unit is active, 1 if not |
 | `us game status` | | | Show active unit name and state |
 | `us game list` | | | List available game profile slugs |
+| `us game show SLUG` | slug | `--json` | Pretty-print profile (appid, resolution, named coords, refs). Use this to find click targets — never guess. |
 | `us game scaffold SLUG` | slug | `--appid ID` `--display-name NAME` | Generate a new game profile directory from the template |
+
+---
+
+## `us xeyes` — input test rig (gamescope + xeyes)
+
+Wraps `xeyes` inside gamescope using the **same flags as `us game launch`**
+(`-e --force-grab-cursor -w -h -W -H`). The eyes follow the cursor, so any
+successful `us act move`/`click` becomes visually verifiable via VNC at
+`:5900` — without needing Steam, Proton, or a game profile. Runs as a
+transient systemd unit (`understudy-xeyes.service`), separate from
+`understudy-game-*` so `us game kill` does NOT affect it.
+
+| Command | Arguments | Key options | Description |
+|---------|-----------|-------------|-------------|
+| `us xeyes up` | | `-W 1920` `-H 1080` | Launch xeyes inside gamescope. Idempotent: no-op if already running. |
+| `us xeyes down` | | `--grace 2` | Stop the xeyes rig. |
+| `us xeyes status` | | | Exits 0 if active, 1 if not. |
+
+Typical input-smoke flow:
+
+```bash
+us stack up
+us xeyes up
+# Connect TigerVNC to :5900 — see two eyes.
+us act move 100 100 -v        # eyes should look up-left
+us act move 1800 900 -v       # eyes should look down-right
+us act click 960 540 -v       # eyes blink (left button)
+us xeyes down
+```
 
 ---
 

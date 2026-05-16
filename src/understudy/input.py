@@ -1,36 +1,89 @@
 """Compositor input: click, move, type, key, scroll.
 
-Two input paths:
-1. **wlrctl** (Wayland): sends virtual pointer/keyboard events to sway.
-   Works for native Wayland surfaces. Does NOT reliably reach Wine/Proton
-   games running inside gamescope (they use X11/Xwayland internally).
+Two input backends, auto-selected based on whether gamescope is running:
 
-2. **xdotool** (X11): sends events directly to the gamescope Xwayland display
-   (e.g. ':3'). Reliably reaches Wine/Proton game windows and Steam overlay.
-   Used automatically when a gamescope session is active.
+1. **xdotool** (X11, default when gamescope is up): events injected directly
+   into gamescope's nested Xwayland (`DISPLAY=:N`). Empirically the only path
+   that reaches Steam-launched Unity-under-Proton games on this stack (verified
+   against Timberborn). Does NOT depend on `_NET_ACTIVE_WINDOW` (gamescope's
+   Xwayland doesn't implement it).
 
-`Compositor.click()` and friends auto-select the best path.
+2. **wlrctl** (Wayland, default when no gamescope): virtual pointer/keyboard
+   events to sway via wlr-virtual-pointer-unstable-v1 / -keyboard-unstable-v1.
+   Sway forwards to its focused client. Reaches simple X11 clients inside
+   gamescope (e.g. xeyes) but empirically does NOT deliver clicks to Steam
+   games — useful for the `us xeyes` rig and direct sway clients only.
+
+Override with `--backend xdotool|wlrctl|auto` or `UNDERSTUDY_BACKEND=...`.
+Set `UNDERSTUDY_VERBOSE=1` (or `--verbose` on `us act ...`) to log every
+injected command + exit code to stderr.
+
+== Coordinate handling ==
+
+`wlrctl pointer move <dx> <dy>` is RELATIVE displacement, not absolute. Sway
+clamps the seat cursor to output bounds, so we issue a large negative delta
+first (lands at (0, 0)) then move by (x, y) for absolute positioning.
 """
 
 from __future__ import annotations
 
 import os
 import re
+import shlex
 import subprocess
+import sys
 import time
-from pathlib import Path
+from typing import Literal
 
 from ._runtime import wayland_env
-from .errors import ExternalCommandError, PreconditionError
+from .errors import ExternalCommandError
+
+Backend = Literal["xdotool", "wlrctl", "auto"]
+
+# Larger than any reasonable display dimension; sway clamps to (0, 0).
+_CLAMP_DELTA = 32768
 
 
 # ---------------------------------------------------------------------------
-# wlrctl helpers (Wayland path)
+# Verbose logging wrapper
+# ---------------------------------------------------------------------------
+
+def _verbose() -> bool:
+    return os.environ.get("UNDERSTUDY_VERBOSE", "").lower() in ("1", "true", "yes")
+
+
+def _run(cmd: list[str], env: dict | None = None) -> subprocess.CompletedProcess:
+    """Run a subprocess, capturing output. Log to stderr when UNDERSTUDY_VERBOSE=1.
+
+    Translates a missing binary into ExternalCommandError with an install hint.
+    """
+    if _verbose():
+        env_prefix = ""
+        if env:
+            for k in ("DISPLAY", "WAYLAND_DISPLAY"):
+                v = env.get(k)
+                if v and v != os.environ.get(k):
+                    env_prefix += f"{k}={shlex.quote(v)} "
+        sys.stderr.write(f"[understudy] {env_prefix}{shlex.join(cmd)}\n")
+    try:
+        r = subprocess.run(cmd, env=env, capture_output=True)
+    except FileNotFoundError:
+        raise ExternalCommandError(
+            f"{cmd[0]!r} not found in PATH.",
+            hint=f"Install it (e.g. `sudo apt install {cmd[0]}`) or pick a different --backend.",
+        )
+    if _verbose():
+        sys.stderr.write(f"[understudy]   → exit {r.returncode}\n")
+    return r
+
+
+# ---------------------------------------------------------------------------
+# wlrctl helpers (Wayland — default)
 # ---------------------------------------------------------------------------
 
 def _wlrctl(*args: str) -> None:
     env = wayland_env()
-    result = subprocess.run(["wlrctl", *args], env=env, capture_output=True)
+    result = _run(["wlrctl", *args], env=env)
     if result.returncode != 0:
         msg = result.stderr.decode().strip() or result.stdout.decode().strip()
         raise ExternalCommandError(
@@ -39,8 +92,20 @@ def _wlrctl(*args: str) -> None:
         )
 
 
+def _wlrctl_move_abs(x: int, y: int) -> None:
+    """Position the seat cursor at absolute (x, y).
+
+    `wlrctl pointer move` takes a relative delta; sway clamps the seat cursor
+    to output bounds, so a large negative delta lands at (0, 0). Then move by
+    (x, y) to land at the target. Two subprocess calls per absolute move.
+    """
+    _wlrctl("pointer", "move", str(-_CLAMP_DELTA), str(-_CLAMP_DELTA))
+    if x or y:
+        _wlrctl("pointer", "move", str(x), str(y))
+
+
 # ---------------------------------------------------------------------------
-# xdotool helpers (X11 / gamescope path)
+# xdotool helpers (X11 / gamescope path — opt-in)
 # ---------------------------------------------------------------------------
 
 def _gamescope_xdisplay() -> str | None:
@@ -64,11 +129,9 @@ def _gamescope_xdisplay() -> str | None:
             if m:
                 xwayland_entries.append((pid, ppid, m.group(1)))
 
-        # Find Xwayland whose parent is a gamescope process
         for pid, ppid, display in xwayland_entries:
             if ppid in gamescope_pids and display != ":0":
                 return display
-        # Fallback: any Xwayland that's not :0
         for pid, ppid, display in xwayland_entries:
             if display != ":0":
                 return display
@@ -114,74 +177,159 @@ def _game_window_id(xdisplay: str) -> str | None:
         return None
 
 
-def _xdotool_click(x: int, y: int, button: str = "left",
-                   xdisplay: str | None = None) -> None:
+def _xdotool_env(xdisplay: str | None = None) -> dict[str, str]:
     display = xdisplay or _gamescope_xdisplay()
     if display is None:
         raise ExternalCommandError(
-            "No gamescope Xwayland display found.",
-            hint="Launch a game first with `us game launch`.",
+            "xdotool backend selected but no gamescope Xwayland display found.",
+            hint="Launch a game first with `us game launch`, or use the default wlrctl backend.",
         )
-    win = _game_window_id(display)
-    env = {**os.environ, "DISPLAY": display}
+    return {**os.environ, "DISPLAY": display}
+
+
+def _xdotool_click(x: int, y: int, button: str = "left",
+                   xdisplay: str | None = None) -> None:
+    env = _xdotool_env(xdisplay)
+    win = _game_window_id(env["DISPLAY"])
     cmds = [["xdotool", "mousemove", str(x), str(y)]]
     if win:
         cmds.insert(0, ["xdotool", "windowfocus", win])
     cmds.append(["xdotool", "click", "--clearmodifiers", "1" if button == "left" else "3"])
     for cmd in cmds:
-        r = subprocess.run(cmd, env=env, capture_output=True)
+        r = _run(cmd, env=env)
         if r.returncode != 0:
             err = r.stderr.decode().strip() or r.stdout.decode().strip()
             raise ExternalCommandError(f"xdotool failed: {err}")
 
 
 def _xdotool_key(keysym: str, xdisplay: str | None = None) -> None:
-    display = xdisplay or _gamescope_xdisplay()
-    if display is None:
-        raise ExternalCommandError("No gamescope Xwayland display found.")
-    env = {**os.environ, "DISPLAY": display}
-    r = subprocess.run(["xdotool", "key", "--clearmodifiers", keysym],
-                       env=env, capture_output=True)
+    env = _xdotool_env(xdisplay)
+    r = _run(["xdotool", "key", "--clearmodifiers", keysym], env=env)
     if r.returncode != 0:
         raise ExternalCommandError(f"xdotool key failed: {r.stderr.decode().strip()}")
 
 
 def _xdotool_type(text: str, xdisplay: str | None = None) -> None:
-    display = xdisplay or _gamescope_xdisplay()
-    if display is None:
-        raise ExternalCommandError("No gamescope Xwayland display found.")
-    env = {**os.environ, "DISPLAY": display}
-    r = subprocess.run(["xdotool", "type", "--clearmodifiers", "--", text],
-                       env=env, capture_output=True)
+    env = _xdotool_env(xdisplay)
+    r = _run(["xdotool", "type", "--clearmodifiers", "--", text], env=env)
     if r.returncode != 0:
         raise ExternalCommandError(f"xdotool type failed: {r.stderr.decode().strip()}")
+
+
+def _xdotool_move(x: int, y: int, xdisplay: str | None = None) -> None:
+    env = _xdotool_env(xdisplay)
+    r = _run(["xdotool", "mousemove", str(x), str(y)], env=env)
+    if r.returncode != 0:
+        raise ExternalCommandError(f"xdotool mousemove failed: {r.stderr.decode().strip()}")
 
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
+def resolve_backend(backend: Backend = "auto") -> str:
+    """Pick a concrete backend. Honors `UNDERSTUDY_BACKEND` env var as a fallback.
+
+    Auto resolves to xdotool when gamescope's Xwayland is reachable (the
+    common case during a game session), else wlrctl.
+
+    Empirical finding from issue #1: on this stack, wlrctl pointer events
+    delivered via sway → gamescope reach simple X11 clients (xeyes) but DO
+    NOT reach Steam-launched games inside gamescope's Xwayland — Unity gets
+    no events. xdotool injected directly into gamescope's Xwayland reaches
+    the game. Both paths land at the requested coordinates (the wlrctl
+    relative→absolute clamp is correct), it's the gamescope→game leg that
+    drops wlrctl events for Steam games.
+    """
+    b = backend if backend != "auto" else os.environ.get("UNDERSTUDY_BACKEND", "auto")
+    if b in ("xdotool", "wlrctl"):
+        return b
+    if _gamescope_xdisplay() is not None:
+        return "xdotool"
+    return "wlrctl"
+
+
+def probe() -> dict:
+    """End-to-end input round-trip probe.
+
+    When gamescope is running, always uses `xdotool getmouselocation` against
+    gamescope's Xwayland as the readback — that's the strongest signal that
+    input reached the game's coordinate space, regardless of which backend
+    did the injection.
+
+    When gamescope is NOT running, falls back to a wlrctl exit-code check
+    (no Wayland API exists to read seat-cursor position back).
+    """
+    backend = resolve_backend("auto")
+    display = _gamescope_xdisplay()
+
+    if display is None:
+        # No gamescope to read back from. Just verify the backend's tool is
+        # functional and sway accepted the protocol message.
+        if backend == "wlrctl":
+            _wlrctl("pointer", "move", "0", "0")
+            return {"backend": "wlrctl", "result": "wlrctl pointer move accepted by sway"}
+        return {"backend": "xdotool", "result": "skipped: no gamescope X server"}
+
+    target_x, target_y = 100, 100
+    env = {**os.environ, "DISPLAY": display}
+
+    # Inject via the active backend.
+    if backend == "wlrctl":
+        _wlrctl_move_abs(target_x, target_y)
+    else:
+        _xdotool_move(target_x, target_y, xdisplay=display)
+
+    # Read back from gamescope's Xwayland regardless of which backend injected.
+    r = _run(["xdotool", "getmouselocation", "--shell"], env=env)
+    if r.returncode != 0:
+        raise ExternalCommandError(
+            f"xdotool getmouselocation failed on {display}: {r.stderr.decode().strip()}"
+        )
+    pos: dict[str, str] = {}
+    for line in r.stdout.decode().splitlines():
+        if "=" in line:
+            k, v = line.split("=", 1)
+            pos[k] = v
+    actual_x = int(pos.get("X", "-1"))
+    actual_y = int(pos.get("Y", "-1"))
+    if abs(actual_x - target_x) > 2 or abs(actual_y - target_y) > 2:
+        raise ExternalCommandError(
+            f"Input probe FAILED: backend={backend!r} injected ({target_x}, {target_y}) "
+            f"but gamescope's Xwayland reports cursor at ({actual_x}, {actual_y}). "
+            f"The {backend} → gamescope → game path is not delivering events.",
+            hint=(
+                f"Try --backend {'xdotool' if backend == 'wlrctl' else 'wlrctl'} to "
+                "isolate which leg is dropping events. See 'Known limitations' in "
+                "references/cli-reference.md."
+            ),
+        )
+    return {
+        "backend": backend,
+        "display": display,
+        "target": [target_x, target_y],
+        "actual": [actual_x, actual_y],
+    }
+
+
 class Compositor:
     """Input driver for the headless sway session.
 
-    All coordinates are absolute pixels within the 1920×1080 HEADLESS-1 output.
+    All coordinates are absolute pixels within the output bounds (typically
+    1920×1080 for HEADLESS-1).
 
-    Uses xdotool (X11) when a gamescope session is active (reliable for Wine/
-    Proton games and Steam overlay), falling back to wlrctl (Wayland) otherwise.
+    Backend selection: pass `backend=` to any method, or set `UNDERSTUDY_BACKEND`
+    in the env. Default (`"auto"`) uses wlrctl (Wayland → sway → gamescope).
+    Pass `backend="xdotool"` to talk directly to gamescope's nested Xwayland.
     """
 
-    def _use_xdotool(self) -> bool:
-        return _gamescope_xdisplay() is not None
-
-    def move(self, x: int, y: int) -> None:
+    def move(self, x: int, y: int, backend: Backend = "auto") -> None:
         """Move the virtual pointer to absolute position (x, y)."""
-        if self._use_xdotool():
-            display = _gamescope_xdisplay()
-            env = {**os.environ, "DISPLAY": display}
-            subprocess.run(["xdotool", "mousemove", str(x), str(y)],
-                           env=env, capture_output=True)
+        b = resolve_backend(backend)
+        if b == "xdotool":
+            _xdotool_move(x, y)
         else:
-            _wlrctl("pointer", "move", str(x), str(y))
+            _wlrctl_move_abs(x, y)
 
     def click(
         self,
@@ -189,52 +337,55 @@ class Compositor:
         y: int,
         button: str = "left",
         delay: float = 0.05,
+        backend: Backend = "auto",
     ) -> None:
         """Move to (x, y) then press and release *button*."""
-        display = _gamescope_xdisplay()
-        if display is not None:
-            # Discover display once; pass it through so _xdotool_click doesn't
-            # call ps again. Skip the separate self.move() — _xdotool_click
-            # already issues its own mousemove before the click.
+        b = resolve_backend(backend)
+        if b == "xdotool":
             time.sleep(delay)
-            _xdotool_click(x, y, button, xdisplay=display)
+            _xdotool_click(x, y, button)
         else:
-            _wlrctl("pointer", "move", str(x), str(y))
+            _wlrctl_move_abs(x, y)
             time.sleep(delay)
             _wlrctl("pointer", "click", button)
 
-    def scroll(self, dx: float = 0.0, dy: float = 0.0) -> None:
+    def scroll(self, dx: float = 0.0, dy: float = 0.0, backend: Backend = "auto") -> None:
         """Scroll horizontally by *dx* and vertically by *dy* (positive = down/right)."""
-        if self._use_xdotool():
-            display = _gamescope_xdisplay()
-            env = {**os.environ, "DISPLAY": display}
+        b = resolve_backend(backend)
+        if b == "xdotool":
+            env = _xdotool_env()
             if dy:
                 btn = "5" if dy > 0 else "4"
                 for _ in range(max(1, abs(int(dy)))):
-                    subprocess.run(["xdotool", "click", btn], env=env, capture_output=True)
+                    _run(["xdotool", "click", btn], env=env)
             if dx:
                 btn = "7" if dx > 0 else "6"
                 for _ in range(max(1, abs(int(dx)))):
-                    subprocess.run(["xdotool", "click", btn], env=env, capture_output=True)
+                    _run(["xdotool", "click", btn], env=env)
         else:
             if dy:
                 _wlrctl("pointer", "scroll", "vertical", str(dy))
             if dx:
                 _wlrctl("pointer", "scroll", "horizontal", str(dx))
 
-    def type(self, text: str) -> None:
+    def type(self, text: str, backend: Backend = "auto") -> None:
         """Type a string of characters."""
-        if self._use_xdotool():
+        b = resolve_backend(backend)
+        if b == "xdotool":
             _xdotool_type(text)
         else:
             _wlrctl("keyboard", "type", text)
 
-    def key(self, keysym: str) -> None:
+    def key(self, keysym: str, backend: Backend = "auto") -> None:
         """Press and release a single key by its XKB keysym name (e.g. 'Return', 'Escape')."""
-        if self._use_xdotool():
+        b = resolve_backend(backend)
+        if b == "xdotool":
             _xdotool_key(keysym)
         else:
+            # wlrctl 0.2.2 has no combined key command — emit press then release
+            # so the key doesn't stay stuck down on the virtual keyboard.
             _wlrctl("keyboard", "press", keysym)
+            _wlrctl("keyboard", "release", keysym)
 
 
 # ---------------------------------------------------------------------------

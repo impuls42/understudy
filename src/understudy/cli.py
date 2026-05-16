@@ -216,6 +216,18 @@ def doctor(as_json: bool = typer.Option(False, "--json")) -> None:
             checks.append({"name": name, "pass": False, "error": str(e)})
             return False
 
+    def _xdg_runtime_dir_sane():
+        import os
+        import stat
+        from ._runtime import xdg_runtime_dir
+        d = xdg_runtime_dir()
+        _assert(d.exists(), f"{d} does not exist (run from a logged-in user session)")
+        st = d.stat()
+        _assert(stat.S_ISDIR(st.st_mode), f"{d} is not a directory")
+        _assert(st.st_uid == os.getuid(), f"{d} is not owned by uid {os.getuid()}")
+        _assert((st.st_mode & 0o777) == 0o700, f"{d} mode is {oct(st.st_mode & 0o777)}, expected 0o700")
+    check("xdg-runtime-dir", _xdg_runtime_dir_sane)
+
     check(
         "sway-running",
         lambda: _assert(Stack.status()["sway"]["active_state"] == "active", "sway not active"),
@@ -248,6 +260,15 @@ def doctor(as_json: bool = typer.Option(False, "--json")) -> None:
 
     check("grim-capture", _grim_capture)
 
+    def _input_probe():
+        from .input import probe
+        result = probe()
+        # `probe()` returns a dict on success/skip and raises on failure.
+        if result.get("result", "").startswith("skipped"):
+            # No gamescope active — nothing to verify at the X11 layer.
+            return
+    check("input-probe", _input_probe)
+
     all_pass = all(c["pass"] for c in checks)
     if as_json:
         typer.echo(_json_mod.dumps({"ok": all_pass, "checks": checks}, indent=2))
@@ -268,21 +289,36 @@ act_app = typer.Typer(no_args_is_help=True, help="Inject synthetic input into th
 app.add_typer(act_app, name="act")
 
 
+_BACKEND_HELP = "Input backend: wlrctl (default), xdotool, or auto."
+
+
+def _apply_verbose(verbose: bool) -> None:
+    """Set UNDERSTUDY_VERBOSE for the input layer if --verbose was passed."""
+    if verbose:
+        import os
+        os.environ["UNDERSTUDY_VERBOSE"] = "1"
+
+
 @act_app.command("click")
 def act_click(
     x: int = typer.Argument(..., help="X coordinate"),
     y: int = typer.Argument(..., help="Y coordinate"),
     button: str = typer.Option("left", "--button", "-b", help="left | right | middle"),
     delay: float = typer.Option(0.05, "--delay", help="Seconds between move and click."),
+    backend: str = typer.Option("auto", "--backend", help=_BACKEND_HELP),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Log every injected command to stderr."),
     as_json: bool = typer.Option(False, "--json"),
 ) -> None:
     """Move pointer to (x, y) and click."""
-    from .input import Compositor
+    from .input import Compositor, resolve_backend
     from .errors import UnderstudyError
+    _apply_verbose(verbose)
     try:
-        Compositor().click(x, y, button=button, delay=delay)
+        Compositor().click(x, y, button=button, delay=delay, backend=backend)  # type: ignore[arg-type]
         if as_json:
-            typer.echo(_json_mod.dumps({"ok": True, "x": x, "y": y, "button": button}))
+            typer.echo(_json_mod.dumps(
+                {"ok": True, "x": x, "y": y, "button": button, "backend": resolve_backend(backend)}  # type: ignore[arg-type]
+            ))
     except UnderstudyError as e:
         _err(e, as_json)
 
@@ -291,15 +327,20 @@ def act_click(
 def act_move(
     x: int = typer.Argument(...),
     y: int = typer.Argument(...),
+    backend: str = typer.Option("auto", "--backend", help=_BACKEND_HELP),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Log every injected command to stderr."),
     as_json: bool = typer.Option(False, "--json"),
 ) -> None:
     """Move the virtual pointer to absolute (x, y)."""
-    from .input import Compositor
+    from .input import Compositor, resolve_backend
     from .errors import UnderstudyError
+    _apply_verbose(verbose)
     try:
-        Compositor().move(x, y)
+        Compositor().move(x, y, backend=backend)  # type: ignore[arg-type]
         if as_json:
-            typer.echo(_json_mod.dumps({"ok": True, "x": x, "y": y}))
+            typer.echo(_json_mod.dumps(
+                {"ok": True, "x": x, "y": y, "backend": resolve_backend(backend)}  # type: ignore[arg-type]
+            ))
     except UnderstudyError as e:
         _err(e, as_json)
 
@@ -307,15 +348,20 @@ def act_move(
 @act_app.command("type")
 def act_type(
     text: str = typer.Argument(..., help="Text to type via virtual keyboard."),
+    backend: str = typer.Option("auto", "--backend", help=_BACKEND_HELP),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Log every injected command to stderr."),
     as_json: bool = typer.Option(False, "--json"),
 ) -> None:
     """Type a string of characters."""
-    from .input import Compositor
+    from .input import Compositor, resolve_backend
     from .errors import UnderstudyError
+    _apply_verbose(verbose)
     try:
-        Compositor().type(text)
+        Compositor().type(text, backend=backend)  # type: ignore[arg-type]
         if as_json:
-            typer.echo(_json_mod.dumps({"ok": True, "typed": text}))
+            typer.echo(_json_mod.dumps(
+                {"ok": True, "typed": text, "backend": resolve_backend(backend)}  # type: ignore[arg-type]
+            ))
     except UnderstudyError as e:
         _err(e, as_json)
 
@@ -323,15 +369,20 @@ def act_type(
 @act_app.command("key")
 def act_key(
     keysym: str = typer.Argument(..., help="XKB keysym name, e.g. Return, Escape, space."),
+    backend: str = typer.Option("auto", "--backend", help=_BACKEND_HELP),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Log every injected command to stderr."),
     as_json: bool = typer.Option(False, "--json"),
 ) -> None:
     """Press and release a single key."""
-    from .input import Compositor
+    from .input import Compositor, resolve_backend
     from .errors import UnderstudyError
+    _apply_verbose(verbose)
     try:
-        Compositor().key(keysym)
+        Compositor().key(keysym, backend=backend)  # type: ignore[arg-type]
         if as_json:
-            typer.echo(_json_mod.dumps({"ok": True, "key": keysym}))
+            typer.echo(_json_mod.dumps(
+                {"ok": True, "key": keysym, "backend": resolve_backend(backend)}  # type: ignore[arg-type]
+            ))
     except UnderstudyError as e:
         _err(e, as_json)
 
@@ -498,6 +549,54 @@ def game_list(as_json: bool = typer.Option(False, "--json")) -> None:
             typer.echo(p)
 
 
+@game_app.command("show")
+def game_show(
+    slug: str = typer.Argument(..., help="Profile slug to inspect."),
+    as_json: bool = typer.Option(False, "--json"),
+) -> None:
+    """Pretty-print a game profile (appid, resolution, named coords, refs)."""
+    from .profile import load_profile
+    try:
+        p = load_profile(slug)
+    except FileNotFoundError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(2)
+    coords = p.coords.all()
+    refs = sorted(p.refs.list()) if p.refs_dir and p.refs_dir.exists() else []
+    if as_json:
+        typer.echo(_json_mod.dumps({
+            "ok": True,
+            "slug": p.slug,
+            "appid": p.appid,
+            "display_name": p.display_name,
+            "resolution": list(p.resolution),
+            "launch_timeout_s": p.launch_timeout_s,
+            "ready_ref": p.ready_ref,
+            "refs_dir": str(p.refs_dir),
+            "extra_gamescope_args": p.extra_gamescope_args,
+            "coords": {k: list(v) for k, v in coords.items()},
+            "refs": refs,
+        }, indent=2))
+        return
+    typer.echo(f"slug:                 {p.slug}")
+    typer.echo(f"appid:                {p.appid}")
+    typer.echo(f"display_name:         {p.display_name}")
+    typer.echo(f"resolution:           {p.resolution[0]}x{p.resolution[1]}")
+    typer.echo(f"launch_timeout_s:     {p.launch_timeout_s}")
+    typer.echo(f"ready_ref:            {p.ready_ref}")
+    typer.echo(f"refs_dir:             {p.refs_dir}")
+    typer.echo(f"extra_gamescope_args: {p.extra_gamescope_args}")
+    if coords:
+        width = max(len(k) for k in coords)
+        typer.echo("coords:")
+        for k, (x, y) in coords.items():
+            typer.echo(f"  {k:<{width}} = ({x}, {y})")
+    if refs:
+        typer.echo("refs:")
+        for r in refs:
+            typer.echo(f"  {r}")
+
+
 @game_app.command("scaffold")
 def game_scaffold(
     slug: str = typer.Argument(..., help="Short lowercase identifier for the game."),
@@ -547,6 +646,110 @@ def game_scaffold(
         typer.echo("Next steps:")
         for s in steps:
             typer.echo(f"  {s}")
+
+
+# ---------------------------------------------------------------------------
+# xeyes — input test rig (gamescope wraps xeyes instead of a Steam game)
+# ---------------------------------------------------------------------------
+
+xeyes_app = typer.Typer(no_args_is_help=True, help="Launch xeyes inside gamescope as an input test rig.")
+app.add_typer(xeyes_app, name="xeyes")
+
+# Separate prefix from `understudy-game-*` so `us game kill` does NOT tear
+# down the xeyes rig and vice versa.
+_XEYES_UNIT = "understudy-xeyes.service"
+
+
+def _xeyes_unit_active() -> bool:
+    from .session import is_unit_active
+    try:
+        return is_unit_active(_XEYES_UNIT)
+    except UnderstudyError:
+        return False
+
+
+@xeyes_app.command("up")
+def xeyes_up(
+    width: int = typer.Option(1920, "--width", "-W", help="Gamescope outer width (sway output size)."),
+    height: int = typer.Option(1080, "--height", "-H", help="Gamescope outer height."),
+    as_json: bool = typer.Option(False, "--json"),
+) -> None:
+    """Launch xeyes inside gamescope using the same H1 flags as `us game launch`.
+
+    Use as an input smoke test: the eyes follow the cursor, so any successful
+    `us act move/click` is visible via VNC at :5900 without needing Steam or
+    a game profile.
+    """
+    import shutil
+    from .session import GameSession
+    if shutil.which("xeyes") is None:
+        typer.echo("Error: xeyes is not installed. Try `sudo apt install x11-apps`.", err=True)
+        raise typer.Exit(2)
+    if _xeyes_unit_active():
+        if as_json:
+            typer.echo(_json_mod.dumps({"ok": True, "note": "xeyes already running", "unit": _XEYES_UNIT}))
+        else:
+            typer.echo(f"xeyes already running (unit: {_XEYES_UNIT}). Use `us xeyes down` to stop it.")
+        return
+    try:
+        # Centered window roughly half the size of the output.
+        gw, gh = width // 2, height // 2
+        gx, gy = (width - gw) // 2, (height - gh) // 2
+        session = GameSession(
+            appid=0,
+            unit_name=_XEYES_UNIT,
+            width=width,
+            height=height,
+            inner_cmd=["xeyes", "-geometry", f"{gw}x{gh}+{gx}+{gy}"],
+        )
+        session.launch()
+        if as_json:
+            typer.echo(_json_mod.dumps({"ok": True, "unit": _XEYES_UNIT, "size": [width, height]}))
+        else:
+            typer.echo(f"xeyes launched (unit: {_XEYES_UNIT}).")
+            typer.echo("Connect TigerVNC to :5900 — the eyes will follow the cursor.")
+            typer.echo("Try:  us act move 100 100 -v")
+            typer.echo("      us act move 1800 900 -v")
+            typer.echo("      us act click 960 540 -v")
+            typer.echo("Stop: us xeyes down")
+    except UnderstudyError as e:
+        _err(e, as_json)
+
+
+@xeyes_app.command("down")
+def xeyes_down(
+    grace: float = typer.Option(2.0, "--grace"),
+    as_json: bool = typer.Option(False, "--json"),
+) -> None:
+    """Stop the xeyes test rig."""
+    from .session import GameSession
+    if not _xeyes_unit_active():
+        if as_json:
+            typer.echo(_json_mod.dumps({"ok": True, "note": "no xeyes unit active"}))
+        else:
+            typer.echo("No xeyes session running.")
+        return
+    try:
+        session = GameSession.from_unit_name(_XEYES_UNIT)
+        session.stop(grace=grace)
+        if as_json:
+            typer.echo(_json_mod.dumps({"ok": True, "killed": _XEYES_UNIT}))
+        else:
+            typer.echo(f"Killed {_XEYES_UNIT}.")
+    except UnderstudyError as e:
+        _err(e, as_json)
+
+
+@xeyes_app.command("status")
+def xeyes_status(as_json: bool = typer.Option(False, "--json")) -> None:
+    """Report whether the xeyes rig is active."""
+    active = _xeyes_unit_active()
+    if as_json:
+        typer.echo(_json_mod.dumps({"ok": True, "active": active, "unit": _XEYES_UNIT}))
+    else:
+        typer.echo("running" if active else "not running")
+    if not active:
+        raise typer.Exit(1)
 
 
 @scene_app.command("wait-for")

@@ -6,10 +6,13 @@ After=dbus.service
 
 [Service]
 Type=simple
-# Use our fixed display name so every component finds the same socket.
-Environment=WAYLAND_DISPLAY=wayland-headless
+# Wayland socket name: sway 1.9 ignores WAYLAND_DISPLAY here (it uses
+# wl_display_add_socket_auto), so the actual socket name is discovered at
+# runtime via _runtime.discover_wayland_display(). No env var helps.
 Environment=WLR_BACKENDS=headless
+Environment=WLR_NO_HARDWARE_CURSORS=1
 Environment=XDG_SESSION_TYPE=wayland
+Environment=XDG_CURRENT_DESKTOP=sway
 ExecStart=/usr/bin/sway -c %h/.config/sway/headless.conf
 # If sway crashes, let it come back; a systemd restart keeps downstream
 # services from seeing a permanent failure.

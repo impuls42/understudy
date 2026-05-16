@@ -63,12 +63,16 @@ class Screen:
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
             tmp = Path(f.name)
         try:
+            # grim quirk: when both -o and -g are passed, -g is ignored and the
+            # full output is captured. -g coords are in layout space, which on
+            # our single-output headless setup equals output space, so drop
+            # -o whenever a region is requested.
             args = ["grim"]
-            if output:
-                args += ["-o", output]
             if region:
                 x, y, w, h = region
                 args += ["-g", f"{x},{y} {w}x{h}"]
+            elif output:
+                args += ["-o", output]
             args.append(str(tmp))
             env = wayland_env()
             result = subprocess.run(args, env=env, capture_output=True)
